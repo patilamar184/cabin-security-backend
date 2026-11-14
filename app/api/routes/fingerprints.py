@@ -32,18 +32,62 @@ def enroll(data:FingerprintStart,owner=Depends(current_owner),db:Session=Depends
     cmd=add_command(db,owner.tenant_id,device.id,'fingerprint_enroll',{'visitor_id':str(visitor.id),'template_id':template_id})
     db.commit(); return {'command_id':str(cmd.id),'template_id': template_id,'status':'queued','message':'Device enrollment command queued. Complete visitor mapping when enrollment succeeds.'}
 @router.post('/device/fingerprints/result')
-def enrollment_result(data:FingerprintResult,device=Depends(current_device),db:Session=Depends(get_db)):
-    visitor=tenant_get(db,Visitor,data.visitor_id,device.tenant_id)
-    rec=db.query(FingerprintEnrollment).filter_by(tenant_id=device.tenant_id,visitor_id=visitor.id,device_id=device.id,template_id=data.template_id).first()
-    if not rec: raise HTTPException(404,'Pending fingerprint enrollment was not found')
-    rec.status='active' if data.success else 'failed'
+def enrollment_result(data: FingerprintResult, device=Depends(current_device), db:Session=Depends(get_db)):
+    visitor = tenant_get(db, Visitor, data.visitor_id, device.tenant_id)
+
+    rec = db.query(FingerprintEnrollment).filter_by(
+        tenant_id=device.tenant_id,
+        visitor_id=visitor.id,
+        device_id=device.id,
+        template_id=data.template_id
+    ).first()
+
+    if not rec:
+        raise HTTPException(404, 'Pending fingerprint enrollment was not found')
+
+    if rec.status != 'pending':
+        raise HTTPException(409, 'Enrollment is already processed')
+
+    rec.status = 'active' if data.success else 'failed'
+
     db.commit()
-    return {'status':rec.status,'visitor_id':str(visitor.id)}
+
+    return {
+        'status': rec.status,
+        'visitor_id': str(visitor.id),
+        'template_id': rec.template_id
+    }
 @router.delete('/fingerprints/{visitor_id}')
-def delete_fingerprint(visitor_id:str,owner=Depends(current_owner),db:Session=Depends(get_db)):
-    rec=db.query(FingerprintEnrollment).filter_by(visitor_id=visitor_id,tenant_id=owner.tenant_id).first()
-    if not rec: raise HTTPException(404,'Fingerprint mapping not found')
-    add_command(db,owner.tenant_id,rec.device_id,'fingerprint_delete',{'template_id':rec.template_id}); db.delete(rec); db.commit(); return {'message':'Fingerprint deletion queued'}
+def delete_fingerprint(visitor_id: str, owner=Depends(current_owner), db:Session=Depends(get_db)):
+    rec = db.query(FingerprintEnrollment).filter_by(
+        visitor_id=visitor_id,
+        tenant_id=owner.tenant_id
+    ).first()
+
+    if not rec:
+        raise HTTPException(404, 'Fingerprint mapping not found')
+
+    if rec.status == 'deleting':
+        raise HTTPException(409, 'Fingerprint deletion is already queued')
+
+    rec.status = 'deleting'
+
+    cmd = add_command(
+        db,
+        owner.tenant_id,
+        rec.device_id,
+        'fingerprint_delete',
+        {'template_id': rec.template_id}
+    )
+
+    db.commit()
+
+    return {
+        'command_id': str(cmd.id),
+        'template_id': rec.template_id,
+        'status': 'deleting',
+        'message': 'Fingerprint deletion queued'
+    }
 @router.get('/fingerprints')
 def list_fingerprints(owner=Depends(current_owner),db:Session=Depends(get_db)):
     rows=db.query(FingerprintEnrollment).filter_by(tenant_id=owner.tenant_id).all(); return [{'id':str(x.id),'visitor_id':str(x.visitor_id),'device_id':str(x.device_id),'template_id':x.template_id,'status':x.status} for x in rows]
