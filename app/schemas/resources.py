@@ -8,7 +8,9 @@ class VisitorOut(ORMModel): id:object; name:str; phone:str; department:str; role
 class DeviceCreate(BaseModel): name:str=Field(min_length=2,max_length=120)
 class DeviceOut(ORMModel): id:object; name:str; status:str; last_heartbeat_at:object|None=None; firmware_version:str|None=None; is_active:bool
 class DeviceConfig(BaseModel): firmware_version:str|None=None
-class FingerprintStart(BaseModel): device_id:str; visitor_id:str; template_id:int=Field(ge=1,le=200)
+class FingerprintStart(BaseModel):
+    device_id: str
+    visitor_id: str
 class FingerprintResult(BaseModel): visitor_id:str; template_id:int=Field(ge=1,le=200); success:bool
 class AccessDecision(BaseModel): duration_minutes:int|None=Field(default=None, ge=1, le=60)
 class DisplayDuration(BaseModel): duration_minutes:int=Field(ge=1,le=180)

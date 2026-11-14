@@ -10,13 +10,27 @@ router=APIRouter(tags=['Fingerprint Enrollment'])
 def enroll(data:FingerprintStart,owner=Depends(current_owner),db:Session=Depends(get_db)):
     device=tenant_get(db,Device,data.device_id,owner.tenant_id)
     visitor=tenant_get(db,Visitor,data.visitor_id,owner.tenant_id)
-    existing=db.query(FingerprintEnrollment).filter_by(device_id=device.id,template_id=data.template_id).first()
-    if existing: raise HTTPException(409,'Template ID is already assigned on this device')
+    used_ids = {
+        row[0] for row in db.query(FingerprintEnrollment.template_id)
+        .filter_by(device_id=device.id).all()
+    }
+
+    template_id = next(
+        (i for i in range(1, 201) if i not in used_ids),
+        None
+    )
+
+    if template_id is None:
+        raise HTTPException(409, 'No available fingerprint slots')
     if db.query(FingerprintEnrollment).filter_by(visitor_id=visitor.id,tenant_id=owner.tenant_id).first(): raise HTTPException(409,'Visitor already has a fingerprint mapping; delete it before replacement')
-    mapping=FingerprintEnrollment(tenant_id=owner.tenant_id,visitor_id=visitor.id,device_id=device.id,template_id=data.template_id,status='pending')
+    mapping=FingerprintEnrollment(tenant_id=owner.tenant_id,
+    visitor_id=visitor.id,
+    device_id=device.id,
+    template_id=template_id,
+    status='pending')
     db.add(mapping)
-    cmd=add_command(db,owner.tenant_id,device.id,'fingerprint_enroll',{'visitor_id':str(visitor.id),'template_id':data.template_id})
-    db.commit(); return {'command_id':str(cmd.id),'status':'queued','message':'Device enrollment command queued. Complete visitor mapping when enrollment succeeds.'}
+    cmd=add_command(db,owner.tenant_id,device.id,'fingerprint_enroll',{'visitor_id':str(visitor.id),'template_id':template_id})
+    db.commit(); return {'command_id':str(cmd.id),'template_id': template_id,'status':'queued','message':'Device enrollment command queued. Complete visitor mapping when enrollment succeeds.'}
 @router.post('/device/fingerprints/result')
 def enrollment_result(data:FingerprintResult,device=Depends(current_device),db:Session=Depends(get_db)):
     visitor=tenant_get(db,Visitor,data.visitor_id,device.tenant_id)
