@@ -21,12 +21,54 @@ def commands(device=Depends(current_device),db:Session=Depends(get_db)):
     rows=db.query(DeviceCommand).filter(DeviceCommand.device_id==device.id,DeviceCommand.status.in_(['pending','delivered']),DeviceCommand.expires_at>utcnow(),((DeviceCommand.status=='pending') | (DeviceCommand.created_at<=utcnow()-timedelta(seconds=10)))).order_by(DeviceCommand.created_at).with_for_update(skip_locked=True).limit(20).all()
     for c in rows: c.status='delivered'
     db.commit(); return [{'id':str(c.id),'command_type':c.command_type,'payload':c.payload,'expires_at':c.expires_at} for c in rows]
+
 @router.post('/commands/{command_id}/ack')
-def acknowledge(command_id:str,data:CommandAck,device=Depends(current_device),db:Session=Depends(get_db)):
-    c=db.query(DeviceCommand).filter_by(id=command_id,device_id=device.id).first()
-    if not c: raise HTTPException(404,'Command not found')
-    if c.status=='acknowledged': return {'message':'Already acknowledged'}
-    c.status='acknowledged' if data.status in ('success','failed') else 'pending'; c.acknowledged_at=utcnow(); c.result=data.result; db.commit(); return {'message':'Command acknowledgement recorded'}
+def acknowledge(
+    command_id: str,
+    data: CommandAck,
+    device=Depends(current_device),
+    db: Session = Depends(get_db)
+):
+    c = db.query(DeviceCommand).filter_by(
+        id=command_id,
+        device_id=device.id
+    ).first()
+
+    if not c:
+        raise HTTPException(404, 'Command not found')
+
+    if c.status == 'acknowledged':
+        return {'message': 'Already acknowledged'}
+
+    if data.status not in ('success', 'failed'):
+        raise HTTPException(400, 'Invalid command status')
+
+    # Handle fingerprint deletion confirmation.
+    if c.command_type == 'fingerprint_delete':
+        template_id = c.payload.get('template_id')
+
+        rec = db.query(FingerprintEnrollment).filter_by(
+            device_id=device.id,
+            template_id=template_id
+        ).first()
+
+        if rec:
+            if data.status == 'success':
+                db.delete(rec)
+            else:
+                rec.status = 'active'
+
+    c.status = 'acknowledged'
+    c.acknowledged_at = utcnow()
+    c.result = data.result
+
+    db.commit()
+
+    return {
+        'message': 'Command acknowledgement recorded',
+        'status': data.status
+    }
+
 @router.post('/authenticate')
 def authenticate(data:AuthEvent,device=Depends(current_device),db:Session=Depends(get_db)):
     method=data.method.lower(); visitor=None; success=False
