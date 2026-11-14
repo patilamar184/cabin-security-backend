@@ -16,6 +16,7 @@ services:
       retries: 10
   api:
     build: .
+    image: amarpatil/cabin-security-api:1.0
     container_name: cabin_security_api
     restart: unless-stopped
     env_file: .env
