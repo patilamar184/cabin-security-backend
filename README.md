@@ -1,95 +1,602 @@
 # Cabin Security Management Backend
 
-FastAPI + PostgreSQL backend for a multi-tenant cabin access-control system. The implementation intentionally has **no email verification, OTP, SMTP, or email-confirmation workflow**. Owner registration activates the account immediately.
+FastAPI + PostgreSQL backend for a multi-tenant Cabin Security and Access Control Management System.
 
-## Run with Docker
+The backend handles owner authentication, platform administration, visitor management, fingerprint enrollment, ESP32 device communication, access requests, door control and entry logs.
 
-1. Copy `.env.example` to `.env`.
-2. Set unique strong values for `POSTGRES_PASSWORD`, `JWT_SECRET_KEY`, and `DEVICE_API_KEY_PEPPER`. Keep `.env` private.
-3. Start: `docker compose up --build -d`.
-4. Open Swagger: http://localhost:8000/docs.
-5. Create the platform admin from inside the API container: `docker compose exec api sh -c 'ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD="Use-A-Strong-Password" python -m app.utils.create_admin'`.
+**Authentication note:** This implementation intentionally has no email verification, OTP, SMTP or email-confirmation workflow. Owner registration activates accounts immediately.
 
-## Owner registration
+## Technology Stack
 
-`POST /api/auth/register` accepts `full_name`, `email`, `password`, `phone`, `cabin_name`, and `cabin_location`. It creates an active tenant and owner, seeds Student/Teacher/Employee/Guest roles, and returns access and refresh tokens immediately. No email confirmation is sent or required.
+- Python 3.12
+- FastAPI
+- PostgreSQL
+- SQLAlchemy
+- Alembic
+- JWT Authentication
+- Docker
+- Docker Compose
+- REST API
 
-## Device setup
+## System Architecture
 
-Register a device from the owner-authenticated `POST /api/devices` endpoint. Copy the returned `device_api_key` immediately. Send it as the `X-Device-Key` header on device endpoints. The key is stored only as a peppered SHA-256 digest.
+```text
+             React + Vite
+                  |
+                  v
+             Nginx Proxy
+                  |
+                  v
+            FastAPI Backend
+                  |
+          +-------+-------+
+          |               |
+          v               v
+      PostgreSQL       ESP32 Device
+                          |
+                    Fingerprint Sensor
+                          |
+                      Door Relay
+```
 
-Device endpoints: `POST /api/device/heartbeat`, `GET /api/device/config`, `GET /api/device/commands`, `POST /api/device/commands/{command_id}/ack`, and `POST /api/device/authenticate`.
+The backend supports multiple cabin owners through tenant-based data isolation.
 
-## Important implementation notes
+## Requirements
 
-- Tenant-owned queries always include the authenticated owner's `tenant_id`; clients cannot choose their tenant.
-- Device authentication is independent from owner JWT authentication.
-- Fingerprint images/templates are not stored in PostgreSQL; only sensor template IDs and metadata are stored.
-- The device enrollment flow queues a command; the device reports its enrollment result through `/api/device/fingerprints/result`.
-- Selecting a return duration queues a display-only command. It does not approve access.
-- Access approval queues an `unlock_door` command; the ESP32 controls the physical relay.
-- This is a strong development baseline, not a certified security product. Before production deployment, add rate limiting, audit hardening, TLS termination, secret rotation, command-delivery leasing/retry semantics, and hardware-in-the-loop tests.
+- Python 3.12
+- Docker Desktop
+- Docker Engine
+- Docker Compose
+- Git
 
-## Local development
+## Project Structure
 
-Create a Python 3.12 virtual environment, install `requirements.txt`, configure `DATABASE_URL`, then run `alembic upgrade head` and `uvicorn app.main:app --reload`.
+```text
+cabin-security-backend/
+│
+├── alembic/
+├── app/
+│   ├── api/
+│   ├── models/
+│   ├── schemas/
+│   ├── services/
+│   ├── utils/
+│   └── main.py
+│
+├── tests/
+├── .dockerignore
+├── .env
+├── .env.example
+├── alembic.ini
+├── docker-compose.yml
+├── Dockerfile
+├── requirements.txt
+└── README.md
+```
 
-## API endpoint inventory
+## Environment Configuration
 
-All routes are prefixed with `/api`.
+Copy the example environment file:
 
-| Router | Endpoint | Purpose |
+```bash
+cp .env.example .env
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Configure the following security-sensitive values in `.env`:
+
+| Variable | Description |
+|---|---|
+| `POSTGRES_PASSWORD` | PostgreSQL database password |
+| `JWT_SECRET_KEY` | Secret used for JWT authentication |
+| `DEVICE_API_KEY_PEPPER` | Pepper used for device API key hashing |
+| `DATABASE_URL` | PostgreSQL connection URL |
+| `ADMIN_EMAIL` | Platform administrator email, if configured |
+| `ADMIN_PASSWORD` | Platform administrator password, if configured |
+
+Use unique, strong secrets for all production deployments.
+
+**Security:** Never commit `.env` to GitHub. Keep `.env.example` free from actual credentials.
+
+## Run With Docker Compose
+
+Docker Compose is the recommended method for running the backend and database.
+
+### Step 1: Configure Environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and configure the required credentials.
+
+### Step 2: Build and Start Containers
+
+```bash
+docker compose up --build -d
+```
+
+### Step 3: Check Container Status
+
+```bash
+docker compose ps
+```
+
+### Step 4: View Backend Logs
+
+```bash
+docker compose logs -f api
+```
+
+### Step 5: Access API Documentation
+
+Swagger UI:
+
+```text
+http://localhost:8000/docs
+```
+
+ReDoc:
+
+```text
+http://localhost:8000/redoc
+```
+
+Health endpoint:
+
+```text
+http://localhost:8000/api/health
+```
+
+Database health:
+
+```text
+http://localhost:8000/api/health/database
+```
+
+## Platform Administrator Setup
+
+Create the initial platform administrator from inside the API container:
+
+```bash
+docker compose exec api sh -c 'ADMIN_EMAIL=admin@example.com ADMIN_PASSWORD="Use-A-Strong-Password" python -m app.utils.create_admin'
+```
+
+Replace the example credentials with your own strong administrator credentials.
+
+The administrator can access the platform administration interface.
+
+## Owner Registration
+
+Endpoint:
+
+```http
+POST /api/auth/register
+```
+
+Required fields:
+
+| Field | Description |
+|---|---|
+| `full_name` | Owner full name |
+| `email` | Owner email address |
+| `password` | Owner password |
+| `phone` | Contact number |
+| `cabin_name` | Cabin name |
+| `cabin_location` | Cabin location |
+
+The registration process:
+
+1. Creates a new tenant.
+2. Creates an active cabin owner.
+3. Seeds the default Student, Teacher, Employee and Guest roles.
+4. Generates access and refresh tokens.
+5. Returns authentication tokens immediately.
+
+No email verification or OTP is required.
+
+## Device Registration and Authentication
+
+Devices are registered through the owner-authenticated endpoint:
+
+```http
+POST /api/devices
+```
+
+Example request:
+
+```json
+{
+  "name": "Cabin Security ESP32"
+}
+```
+
+The backend returns a `device_api_key`.
+
+**Important:** Copy and securely store the device API key immediately. It is stored in the database only as a peppered SHA-256 digest.
+
+Send the device key in the following HTTP header:
+
+```http
+X-Device-Key: YOUR_DEVICE_API_KEY
+```
+
+Device authentication is independent of owner JWT authentication.
+
+### Device Endpoints
+
+| Method | Endpoint | Purpose |
 |---|---|---|
-| Auth | `POST /auth/register` | Create active owner + tenant; return tokens |
-| Auth | `POST /auth/login` | Owner login |
-| Auth | `POST /auth/refresh` | Rotate refresh token |
-| Auth | `POST /auth/logout` | Revoke refresh token |
-| Auth | `GET /auth/me` | Current owner profile |
-| Admin | `POST /admin/login` | Platform admin login |
-| Admin | `GET /admin/owners` | List cabin owners |
-| Admin | `PATCH /admin/owners/{owner_id}/status` | Activate/deactivate owner |
-| Admin | `GET /admin/stats` | Platform statistics |
-| Visitors | `POST /visitors` | Register visitor and issue one-time PIN |
-| Visitors | `GET /visitors` | Search/list tenant visitors |
-| Visitors | `GET /visitors/{visitor_id}` | Visitor detail |
-| Visitors | `PATCH /visitors/{visitor_id}` | Update visitor |
-| Visitors | `POST /visitors/{visitor_id}/reset-pin` | Issue new one-time PIN |
-| Roles | `POST /visitor-roles` | Create role |
-| Roles | `GET /visitor-roles` | List roles |
-| Roles | `PATCH /visitor-roles/{role_id}` | Rename role |
-| Roles | `DELETE /visitor-roles/{role_id}` | Deactivate role |
-| Fingerprints | `POST /fingerprints/enroll` | Queue device enrollment |
-| Fingerprints | `GET /fingerprints` | List mappings |
-| Fingerprints | `DELETE /fingerprints/{visitor_id}` | Queue sensor deletion and remove mapping |
-| Fingerprints/device | `POST /device/fingerprints/result` | Device reports enrollment result |
-| Access | `GET /access-requests` | List owner requests |
-| Access | `POST /access-requests/{request_id}/approve` | Approve and queue unlock |
-| Access | `POST /access-requests/{request_id}/deny` | Deny and queue device message |
-| Access | `POST /access-requests/display-duration` | Queue return-after display message |
-| Devices | `POST /devices` | Register device; return API key once |
-| Devices | `GET /devices` | List tenant devices |
-| Devices | `PATCH /devices/{device_id}/status` | Activate/deactivate device |
-| Device | `POST /device/heartbeat` | Update online heartbeat |
-| Device | `GET /device/config` | Fetch device configuration |
-| Device | `GET /device/commands` | Poll pending/retryable commands |
-| Device | `POST /device/commands/{command_id}/ack` | Acknowledge command |
-| Device | `POST /device/authenticate` | Submit PIN/fingerprint authentication event |
-| Door | `POST /door/unlock` | Owner-initiated unlock command |
-| Logs | `GET /entry-logs` | Filtered entry history |
-| Dashboard | `GET /dashboard/stats` | Tenant dashboard metrics |
-| Health | `GET /health` | API health |
-| Health | `GET /health/database` | Database health |
+| POST | `/api/device/heartbeat` | Update device heartbeat |
+| GET | `/api/device/config` | Fetch device configuration |
+| GET | `/api/device/commands` | Fetch pending commands |
+| POST | `/api/device/commands/{command_id}/ack` | Acknowledge commands |
+| POST | `/api/device/authenticate` | Submit authentication event |
+| POST | `/api/device/fingerprints/result` | Report enrollment result |
 
-## Database relationships
+## Fingerprint Enrollment
 
-- `tenants` has one `cabin_owners` record and many tenant-owned visitors, roles, devices, commands, requests, logs, and fingerprint mappings.
-- `visitors` belongs to one `tenant` and one `visitor_role`; it has one PIN credential and at most one fingerprint mapping.
-- `devices` belongs to one tenant and has many commands, fingerprint mappings, access requests, and entry logs.
-- `access_requests` belongs to a tenant and optionally references a visitor and device.
-- `device_commands` belongs to a tenant and device. Commands expire and are acknowledged idempotently; unacknowledged deliveries are eligible for retry after 10 seconds.
-- `refresh_tokens` belongs to a cabin owner and stores only a SHA-256 token digest, not the raw token.
+The fingerprint enrollment workflow uses the ESP32 and fingerprint sensor.
+
+1. Owner registers a visitor.
+2. Owner initiates fingerprint enrollment.
+3. Backend queues an enrollment command.
+4. ESP32 retrieves the pending command.
+5. Fingerprint sensor performs enrollment.
+6. Device sends the enrollment result to the backend.
+7. Backend stores the sensor template ID and associated metadata.
+
+Fingerprint images and biometric templates are not stored in PostgreSQL. Only sensor template IDs and metadata are stored.
+
+## Access Control and Door Management
+
+The backend supports access request management and door control.
+
+### Access Approval
+
+When an owner approves an access request:
+
+1. Backend updates the access request.
+2. Backend queues an `unlock_door` command.
+3. ESP32 retrieves the command.
+4. ESP32 controls the physical relay.
+
+### Access Denial
+
+When an owner denies an access request, the backend queues a device message.
+
+### Return Duration
+
+Selecting a return duration queues a display-only command. It does not approve access or unlock the door.
+
+## API Endpoint Inventory
+
+All API routes are prefixed with `/api`.
+
+### Authentication
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/auth/register` | Register owner and tenant |
+| POST | `/api/auth/login` | Owner login |
+| POST | `/api/auth/refresh` | Rotate refresh token |
+| POST | `/api/auth/logout` | Revoke refresh token |
+| GET | `/api/auth/me` | Current owner profile |
+
+### Platform Administration
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/admin/login` | Admin login |
+| GET | `/api/admin/owners` | List cabin owners |
+| PATCH | `/api/admin/owners/{owner_id}/status` | Activate/deactivate owner |
+| GET | `/api/admin/stats` | Platform statistics |
+
+### Visitor Management
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/visitors` | Register visitor and issue one-time PIN |
+| GET | `/api/visitors` | Search/list visitors |
+| GET | `/api/visitors/{visitor_id}` | Visitor details |
+| PATCH | `/api/visitors/{visitor_id}` | Update visitor |
+| POST | `/api/visitors/{visitor_id}/reset-pin` | Issue new PIN |
+
+### Visitor Roles
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/visitor-roles` | Create role |
+| GET | `/api/visitor-roles` | List roles |
+| PATCH | `/api/visitor-roles/{role_id}` | Rename role |
+| DELETE | `/api/visitor-roles/{role_id}` | Deactivate role |
+
+### Fingerprint Management
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/fingerprints/enroll` | Queue fingerprint enrollment |
+| GET | `/api/fingerprints` | List fingerprint mappings |
+| DELETE | `/api/fingerprints/{visitor_id}` | Queue sensor deletion and remove mapping |
+| POST | `/api/device/fingerprints/result` | Device reports enrollment result |
+
+### Access Requests
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/access-requests` | List owner requests |
+| POST | `/api/access-requests/{request_id}/approve` | Approve and queue unlock |
+| POST | `/api/access-requests/{request_id}/deny` | Deny and queue device message |
+| POST | `/api/access-requests/display-duration` | Queue return-duration display |
+
+### Device Management
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/devices` | Register device |
+| GET | `/api/devices` | List tenant devices |
+| PATCH | `/api/devices/{device_id}/status` | Activate/deactivate device |
+
+### Device Communication
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/device/heartbeat` | Device heartbeat |
+| GET | `/api/device/config` | Device configuration |
+| GET | `/api/device/commands` | Retrieve pending/retryable commands |
+| POST | `/api/device/commands/{command_id}/ack` | Acknowledge command |
+| POST | `/api/device/authenticate` | Submit authentication event |
+
+### Door Management
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| POST | `/api/door/unlock` | Owner-initiated unlock command |
+
+### Logs and Dashboard
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/entry-logs` | Filtered entry history |
+| GET | `/api/dashboard/stats` | Tenant dashboard metrics |
+
+### Health Monitoring
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/api/health` | API health |
+| GET | `/api/health/database` | Database health |
+
+## Database Relationships
+
+The application uses PostgreSQL with tenant-based data separation.
+
+- `tenants` has one cabin owner and multiple tenant-owned records.
+- `visitors` belongs to a tenant and a visitor role.
+- `devices` belongs to a tenant.
+- `access_requests` belongs to a tenant and can reference a visitor and device.
+- `device_commands` belongs to a tenant and device.
+- `refresh_tokens` belongs to a cabin owner.
 - `platform_admins` are global identities and are not tenant-owned.
 
-## Migrations
+### Security and Data Isolation
 
-The initial migration creates the schema from the SQLAlchemy metadata. For subsequent schema changes, create a revision with `alembic revision --autogenerate -m "describe change"`, inspect the generated migration, then apply it using `alembic upgrade head`.
+- Tenant-owned queries include the authenticated owner's `tenant_id`.
+- Clients cannot select or override their tenant ID.
+- Device authentication is independent of owner JWT authentication.
+- Refresh tokens are stored as SHA-256 digests.
+- Device API keys are stored as peppered SHA-256 digests.
+
+## Device Command Management
+
+The backend uses a command queue for device communication.
+
+- Devices poll for pending commands.
+- Commands can expire.
+- Commands are acknowledged idempotently.
+- Unacknowledged deliveries become eligible for retry after 10 seconds.
+
+## Database Migrations
+
+The project uses Alembic for database schema management.
+
+Apply migrations:
+
+```bash
+docker compose exec api alembic upgrade head
+```
+
+Generate a new migration:
+
+```bash
+docker compose exec api alembic revision --autogenerate -m "describe change"
+```
+
+Review the generated migration before applying it.
+
+Apply the migration:
+
+```bash
+docker compose exec api alembic upgrade head
+```
+
+## Local Development Without Docker
+
+### Step 1: Create Virtual Environment
+
+```bash
+python -m venv .venv
+```
+
+Activate on Windows:
+
+```powershell
+.venv\Scripts\activate
+```
+
+Activate on Linux/macOS:
+
+```bash
+source .venv/bin/activate
+```
+
+### Step 2: Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### Step 3: Configure Database
+
+Configure `DATABASE_URL` in `.env` to point to your PostgreSQL database.
+
+### Step 4: Apply Migrations
+
+```bash
+alembic upgrade head
+```
+
+### Step 5: Start FastAPI
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Access the API:
+
+```text
+http://localhost:8000/docs
+```
+
+## Docker Management Commands
+
+Start containers:
+
+```bash
+docker compose up -d
+```
+
+Rebuild and start:
+
+```bash
+docker compose up --build -d
+```
+
+Stop containers:
+
+```bash
+docker compose down
+```
+
+View logs:
+
+```bash
+docker compose logs -f
+```
+
+Restart API:
+
+```bash
+docker compose restart api
+```
+
+Check running containers:
+
+```bash
+docker compose ps
+```
+
+## Frontend Integration
+
+The frontend communicates with this backend through Nginx.
+
+Frontend:
+
+```text
+http://localhost:5173
+```
+
+Backend:
+
+```text
+http://localhost:8000
+```
+
+Swagger documentation:
+
+```text
+http://localhost:8000/docs
+```
+
+The frontend Nginx configuration uses:
+
+```text
+http://host.docker.internal:8000
+```
+
+Ensure that the backend API port is published on the Docker host.
+
+## Troubleshooting
+
+### Backend Not Starting
+
+```bash
+docker compose logs -f api
+```
+
+### Database Connection Error
+
+Check PostgreSQL status:
+
+```bash
+docker compose ps
+```
+
+Check database logs:
+
+```bash
+docker compose logs db
+```
+
+### API Not Accessible
+
+Check:
+
+```text
+http://localhost:8000/docs
+```
+
+Verify that the API container is running and port 8000 is published.
+
+### Frontend Shows 502 Bad Gateway
+
+Check backend availability and the frontend Nginx upstream configuration.
+
+### Migration Errors
+
+```bash
+docker compose exec api alembic upgrade head
+```
+
+## Security Considerations
+
+This project is a strong development baseline, not a certified security product.
+
+Before production deployment, consider:
+
+- Rate limiting.
+- Audit hardening.
+- TLS termination.
+- Secret rotation.
+- Command-delivery leasing and retry semantics.
+- Hardware-in-the-loop testing.
+- Secure device provisioning.
+
+## License
+
+Add your project's chosen license before public distribution.
